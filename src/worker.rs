@@ -17,7 +17,7 @@ use std::thread;
 use std::time::Duration;
 use std::ffi::OsString;
 
-use tempdir::TempDir;
+use tempfile::{Builder, TempDir};
 use zmq::{Context, Message, Socket, SNDMORE};
 
 /// Generic requirements for CorTeX workers
@@ -95,7 +95,7 @@ pub trait Worker: Clone + Send {
     // Work in perpetuity
     loop {
       // Prepare a File for the input
-      let input_tmpdir = TempDir::new("cortex_task").unwrap();
+      let input_tmpdir = Builder::new().prefix("cortex_task").tempdir().unwrap();
       let (file_result, input_filepath, input_size, taskid) =
         self.receive_from_cortex(&input_tmpdir, &source);
       let converted_result = if file_result.is_ok() {

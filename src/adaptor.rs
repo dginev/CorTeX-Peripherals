@@ -8,8 +8,7 @@ use std::io::{Seek, Write};
 use std::iter::Iterator;
 use std::path::Path;
 
-use tempdir::TempDir;
-use tempfile::tempfile;
+use tempfile::{tempfile, Builder, TempDir};
 
 use walkdir::{DirEntry, WalkDir};
 use zip::write::FileOptions;
@@ -18,7 +17,7 @@ use zip::ZipArchive;
 /// Transform the ZIP provided by cortex into a TempDir,
 /// for e.g. tools such as Engrafo that aren't ZIP-capable
 pub fn extract_zip_to_tmpdir(path: &Path, tmpdir_prefix: &str) -> Result<TempDir, Box<dyn Error>> {
-    let input_tmpdir = TempDir::new(tmpdir_prefix)?;
+    let input_tmpdir = Builder::new().prefix(tmpdir_prefix).tempdir()?;
     let unpacked_dir_path = input_tmpdir.path().to_str().unwrap().to_string() + "/";
 
     // unpack the Zip file for engrafo

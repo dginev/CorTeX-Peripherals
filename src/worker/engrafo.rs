@@ -15,7 +15,7 @@ use std::io::{Write};
 use std::path::Path;
 use std::process::Command;
 use std::error::Error;
-use tempdir::TempDir;
+use tempfile::Builder;
 
 use super::Worker;
 use crate::adaptor;
@@ -84,7 +84,7 @@ impl Worker for EngrafoWorker {
   fn convert(&self, path: &Path) -> Result<File, Box<Error>> {
     let input_tmpdir = adaptor::extract_zip_to_tmpdir(path, "engrafo_input")?;
     let unpacked_dir_path = input_tmpdir.path().to_str().unwrap().to_string() + "/";
-    let destination_tmpdir = TempDir::new("engrafo_output").unwrap();
+    let destination_tmpdir = Builder::new().prefix("engrafo_output").tempdir().unwrap();
     let destination_dir_path = destination_tmpdir.path().to_str().unwrap();
     let tmp_dir_str = env::temp_dir().as_path().display().to_string();
     let docker_input_path = unpacked_dir_path.replace(&tmp_dir_str, "/workdir");

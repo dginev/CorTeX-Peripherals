@@ -1,14 +1,24 @@
 //! This module is a trimmed-down copy of rtx_core::util::logger,
 //! which is still waiting to get released as a crate...
 //! maybe there is a simple logger crate that achieves this exact behavior?
-use ansi_term::Colour::{Green, Red, White, Yellow};
-use ansi_term::Style;
 use chrono::Local;
 use log::max_level;
 use log::{Level, LevelFilter, Metadata, Record, SetLoggerError};
 
 struct RtxLogger;
 static LOGGER: RtxLogger = RtxLogger;
+
+/// Wrap `text` in an ANSI SGR color escape; an empty `code` leaves it
+/// unstyled (matching the old `ansi_term` `Style::default()`). Replaces the
+/// unmaintained `ansi_term` crate (RUSTSEC-2021-0139) with a zero-dependency
+/// hand-rolled painter.
+fn paint(code: &str, text: &str) -> String {
+  if code.is_empty() {
+    text.to_string()
+  } else {
+    format!("\x1b[{}m{}\x1b[0m", code, text)
+  }
+}
 
 /// Convenient printing to STDERR (with \n)
 #[macro_export]
@@ -63,15 +73,14 @@ impl log::Log for RtxLogger {
 
       let message = format!("{}\t", category_object);
 
-      let painted_message = match record.level() {
-        Level::Info => Green.paint(message),
-        Level::Warn => Yellow.paint(message),
-        Level::Error => Red.paint(message),
-        Level::Debug => Style::default().paint(message),
-        _ => White.paint(message),
-      }
-      .to_string()
-        + &details.to_string();
+      let color_code = match record.level() {
+        Level::Info => "32",  // Green
+        Level::Warn => "33",  // Yellow
+        Level::Error => "31", // Red
+        Level::Debug => "",   // default (no color)
+        _ => "37",            // White
+      };
+      let painted_message = paint(color_code, &message) + &details.to_string();
 
       println_stderr!(
         "\r[{}] {}",
