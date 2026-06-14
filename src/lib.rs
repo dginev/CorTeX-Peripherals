@@ -10,7 +10,7 @@
 
 #![doc(html_root_url = "https://dginev.github.io/rust-cortex-peripherals/")]
 #![doc(
-  html_logo_url = "https://raw.githubusercontent.com/dginev/rust-cortex/master/public/img/logo.jpg"
+    html_logo_url = "https://raw.githubusercontent.com/dginev/rust-cortex/master/public/img/logo.jpg"
 )]
 #![deny(missing_docs)]
 
