@@ -11,7 +11,7 @@ fn mock_round_trip() {
         let ventilator_context = zmq::Context::new();
         let ventilator = ventilator_context.socket(zmq::ROUTER).unwrap();
         let ventilator_address = "tcp://127.0.0.1:51695";
-        assert!(ventilator.bind(&ventilator_address).is_ok());
+        assert!(ventilator.bind(ventilator_address).is_ok());
 
         // We expect one request
         let mut msg = zmq::Message::new();
@@ -30,7 +30,7 @@ fn mock_round_trip() {
         let sink_context = zmq::Context::new();
         let sink = sink_context.socket(zmq::PULL).unwrap();
         let sink_address = "tcp://127.0.0.1:51696";
-        assert!(sink.bind(&sink_address).is_ok());
+        assert!(sink.bind(sink_address).is_ok());
 
         let mut id_msg = zmq::Message::new();
         sink.recv(&mut id_msg, 0).unwrap();

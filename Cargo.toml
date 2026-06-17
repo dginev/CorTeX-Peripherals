@@ -1,6 +1,6 @@
 [package]
 name = "pericortex"
-version = "0.2.5"
+version = "0.2.6"
 edition = "2021"
 authors = ["Deyan Ginev <d.ginev@jacobs-university.de>"]
 
@@ -8,26 +8,11 @@ authors = ["Deyan Ginev <d.ginev@jacobs-university.de>"]
 name = "pericortex"
 crate-type = ["lib", "dylib"]
 
-[[bin]]
-required-features = ["engrafo"]
-name = "engrafo_worker"
-path = "bin/engrafo_worker.rs"
-
-[features]
-default=[]
-engrafo=[]
-
-[package.metadata.docs.rs]
-features = ["engrafo"]
-no-default-features = true
-
 [dependencies]
-rand = "0.8.0"
 zmq = "0.10.0"
-zip = "0.6.0"
-num_cpus = "1.10.0"
 tempfile = "3.0.7"
-walkdir = "2.2.7"
 hostname = "0.3.0"
 log = "0.4.0"
 chrono = "0.4.6"
+# Process-fleet harness: SIGTERM/SIGINT handling + graceful child termination.
+libc = "0.2"

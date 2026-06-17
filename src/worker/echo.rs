@@ -36,10 +36,10 @@ impl Worker for EchoWorker {
     fn get_service(&self) -> &str {
         &self.service
     }
-    fn get_source_address(&self) -> Cow<str> {
+    fn get_source_address(&self) -> Cow<'_, str> {
         Cow::Borrowed(&self.source)
     }
-    fn get_sink_address(&self) -> Cow<str> {
+    fn get_sink_address(&self) -> Cow<'_, str> {
         Cow::Borrowed(&self.sink)
     }
     fn message_size(&self) -> usize {

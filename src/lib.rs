@@ -17,6 +17,6 @@
 #[macro_use]
 extern crate log;
 
-pub mod adaptor;
+pub mod harness;
 pub mod logger;
 pub mod worker;
