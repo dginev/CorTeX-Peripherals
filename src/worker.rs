@@ -41,6 +41,16 @@ pub trait Worker: Clone + Send {
     fn pool_size(&self) -> usize {
         1
     }
+    /// Whether this worker should retire after the task it just completed, so the
+    /// supervisor forks a fresh process. Checked **after** the result is returned to
+    /// the sink, so retiring loses no work; the worker exits cleanly (the supervisor
+    /// treats it as a recycle, not a crash). Default: never. A long-lived worker
+    /// overrides this to bound per-process memory — e.g. retire once RSS crosses a
+    /// high-water mark — so accumulated allocator/interner state is reclaimed by
+    /// process replacement without ever failing a paper.
+    fn recycle_after_task(&self) -> bool {
+        false
+    }
     /// Sets a uniquely identifying string for this worker instance
     fn set_identity(&mut self, _identity: String) {
         unimplemented!()
@@ -218,6 +228,17 @@ pub trait Worker: Clone + Send {
                     {
                         // Give the final result a moment to flush to the sink.
                         thread::sleep(Duration::new(1, 0));
+                        break;
+                    }
+                    // Memory-based adaptive recycle: a worker that has grown past its
+                    // high-water (an aberrant heavy paper, or slow accumulation) retires
+                    // cleanly here — the result is already returned, so no work is lost —
+                    // and the supervisor forks a fresh process with a reset heap/interner.
+                    if self.recycle_after_task() {
+                        info!(
+                          target: &format!("{}:recycle", self.get_identity()),
+                          "memory high-water reached after {work_counter} task(s); recycling (clean exit) for a fresh heap"
+                        );
                         break;
                     }
                 },
