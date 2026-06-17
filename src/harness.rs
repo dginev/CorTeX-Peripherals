@@ -466,18 +466,18 @@ fn run_governor(floor: u64, slots: &[Slot], shedding: &mut bool, last_shed: &mut
     }
     let now = Instant::now();
     let due = last_shed.is_none_or(|t| now.saturating_duration_since(t) >= SHED_INTERVAL);
-    if due {
-      if let Some((idx, pid, rss)) = largest_rss_worker(slots) {
-        warn!(
-          target: "pericortex:harness",
-          "shedding worker #{} (pid {pid}, RSS {} MiB) to relieve pressure; its task will be re-leased",
-          idx + 1, rss / MIB
-        );
-        if let Some(child) = slots[idx].child.as_ref() {
-          term(child);
-        }
-        *last_shed = Some(now);
+    if due
+      && let Some((idx, pid, rss)) = largest_rss_worker(slots)
+    {
+      warn!(
+        target: "pericortex:harness",
+        "shedding worker #{} (pid {pid}, RSS {} MiB) to relieve pressure; its task will be re-leased",
+        idx + 1, rss / MIB
+      );
+      if let Some(child) = slots[idx].child.as_ref() {
+        term(child);
       }
+      *last_shed = Some(now);
     }
   } else if avail > ceiling && *shedding {
     info!(

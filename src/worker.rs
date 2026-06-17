@@ -213,12 +213,12 @@ pub trait Worker: Clone + Send {
                     // and faults must not consume the `--limit` budget (otherwise a
                     // momentarily-empty queue would "finish" a bounded run early).
                     work_counter += 1;
-                    if let Some(upper_bound) = limit {
-                        if work_counter >= upper_bound {
-                            // Give the final result a moment to flush to the sink.
-                            thread::sleep(Duration::new(1, 0));
-                            break;
-                        }
+                    if let Some(upper_bound) = limit
+                        && work_counter >= upper_bound
+                    {
+                        // Give the final result a moment to flush to the sink.
+                        thread::sleep(Duration::new(1, 0));
+                        break;
                     }
                 },
                 Ok(None) => {
