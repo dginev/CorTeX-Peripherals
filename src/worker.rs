@@ -18,7 +18,7 @@ use std::thread;
 use std::time::Duration;
 
 use tempfile::{Builder, TempDir};
-use zmq::{Context, Message, Socket, SNDMORE};
+use zmq::{Context, Message, SNDMORE, Socket};
 
 /// A task leased from the ventilator: `(input_filepath, input_size, taskid)` — the
 /// source archive's on-disk path, its byte size, and the task id whose result must
@@ -60,6 +60,22 @@ pub trait Worker: Clone + Send {
         unimplemented!()
     }
 
+    /// An optional **stable** suffix that replaces the per-process PID in the worker's ZMQ identity
+    /// (`<host>:<service>:<suffix>`). Default `None` → use the PID, which is globally unique across a
+    /// fleet of independent processes — REQUIRED in the general case, since two workers sharing an
+    /// identity collide under the dispatcher's `router_handover` (see [`Worker::start`]).
+    ///
+    /// A **harness** worker (the supervisor keeps exactly one live process per slot — see
+    /// `crate::harness`) may instead return its **stable slot index** here: at most one process owns
+    /// a given slot at any time, so a respawn re-using the slot's identity is the *intended* clean
+    /// handover, not a concurrent collision. The identity then stays stable across runs — returning
+    /// workers are recognized and `worker_metadata` is bounded to one row per slot instead of one per
+    /// PID. ONLY safe under that single-owner-per-suffix guarantee (pool_size 1 + harness
+    /// supervision); pooled or free-running workers MUST keep the `None`/PID default.
+    fn stable_identity_suffix(&self) -> Option<String> {
+        None
+    }
+
     /// sets up the worker process, with as many threads as requested
     fn start(&mut self, limit: Option<usize>) -> Result<(), Box<dyn Error>>
     where
@@ -91,7 +107,12 @@ pub trait Worker: Clone + Send {
         let pid = std::process::id();
         match self.pool_size() {
             1 => {
-                self.set_identity(format!("{hostname}:{service}:{pid}"));
+                // A harness worker may supply a stable slot suffix (single-owner-per-slot, so it
+                // can't collide); everything else falls back to the globally-unique PID.
+                let suffix = self
+                    .stable_identity_suffix()
+                    .unwrap_or_else(|| pid.to_string());
+                self.set_identity(format!("{hostname}:{service}:{suffix}"));
                 self.start_single(limit)
             }
             n => {
@@ -241,12 +262,12 @@ pub trait Worker: Clone + Send {
                         );
                         break;
                     }
-                },
+                }
                 Ok(None) => {
                     // The dispatcher had nothing for us (a mock "0" reply: empty
                     // queue, backpressure, paused corpus, or unknown service).
                     self.throttle();
-                },
+                }
                 Err(e) => {
                     // Transport fault or a wedged/timed-out reply. Rebuild the
                     // request socket (discards the in-flight request + any late
@@ -263,7 +284,7 @@ pub trait Worker: Clone + Send {
                           "could not rebuild the request socket ({e2}); will retry next loop"
                         ),
                     }
-                },
+                }
             }
         }
         Ok(())
@@ -385,7 +406,7 @@ pub trait Worker: Clone + Send {
                   target: &format!("{}:completed", self.get_identity()),
                   "task {taskid}, sent {total_size} bytes back to CorTeX."
                 );
-            },
+            }
             Err(e) => {
                 // The conversion produced nothing usable (an infrastructure
                 // failure — disk, OOM-survivor, etc.). Send a single empty data
@@ -396,7 +417,7 @@ pub trait Worker: Clone + Send {
                   "task {taskid} produced no result ({e}); returning an empty (failed) reply"
                 );
                 sink.send(Vec::new(), 0)?;
-            },
+            }
         }
         Ok(())
     }
