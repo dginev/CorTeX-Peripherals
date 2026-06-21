@@ -3,7 +3,7 @@
 
 **Worker executables and the shared worker runtime for [CorTeX](https://github.com/dginev/CorTeX) — a general processing framework for scientific documents**
 
-[![Build Status](https://github.com/dginev/CorTeX-Peripherals/workflows/CI/badge.svg)](https://github.com/dginev/CorTeX-Peripherals/actions?query=workflow%3ACI) [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://raw.githubusercontent.com/dginev/CorTeX-Peripherals/master/LICENSE) ![version](https://img.shields.io/badge/version-0.2.6-orange.svg)
+[![Build Status](https://github.com/dginev/CorTeX-Peripherals/workflows/CI/badge.svg)](https://github.com/dginev/CorTeX-Peripherals/actions?query=workflow%3ACI) [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://raw.githubusercontent.com/dginev/CorTeX-Peripherals/main/LICENSE) ![version](https://img.shields.io/badge/version-0.2.6-orange.svg)
 
 The `pericortex::worker::Worker` trait automates a worker's ZeroMQ dialogue with a
 CorTeX dispatcher: it requests a task for a named service from the ventilator,
