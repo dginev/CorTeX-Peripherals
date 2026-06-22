@@ -11,7 +11,7 @@ crate-type = ["lib", "dylib"]
 [dependencies]
 zmq = "0.10.0"
 tempfile = "3.0.7"
-hostname = "0.3.0"
+hostname = "0.4.2"
 log = "0.4.0"
 chrono = "0.4.6"
 # Process-fleet harness: SIGTERM/SIGINT handling + graceful child termination.
