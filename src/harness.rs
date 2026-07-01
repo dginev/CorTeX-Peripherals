@@ -242,6 +242,19 @@ pub struct HarnessConfig {
   /// itself. The common case (most jobs small) never trips it and runs the full
   /// worker count. Pair it with an outer cgroup `memory.max` for a hard backstop.
   pub mem_pressure_floor_bytes: Option<u64>,
+  /// If set, a live worker whose **CPU time stops advancing** for this long is
+  /// treated as *unresponsive* — wedged in a blocking wait / deadlocked, or a
+  /// task whose own in-process watchdog failed to fire — and SIGKILLed so the
+  /// slot reaps and respawns (`None` = check disabled). Death-driven supervision
+  /// (SIGCHLD) can't see this: the process is still *alive*, just making no
+  /// progress. Detection is CPU-progress based (reads `/proc/<pid>/stat`), so it
+  /// catches a *frozen* worker; a rare busy-**spinning** wedge (CPU advancing but
+  /// no real progress) is left to the task's own watchdog. Set it comfortably
+  /// **above** the worker's per-task wall-clock timeout — a legitimately slow
+  /// task blocked on a subprocess with the worker's own CPU idle would otherwise
+  /// be a false positive. A killed wedge is a *slow* death (respawns promptly, no
+  /// crash-loop backoff); its in-flight task is re-leased by the dispatcher.
+  pub unresponsive_timeout: Option<Duration>,
 }
 
 impl Default for HarnessConfig {
@@ -252,6 +265,7 @@ impl Default for HarnessConfig {
       respawn_backoff: Duration::from_secs(1),
       mem_limit_bytes: None,
       mem_pressure_floor_bytes: None,
+      unresponsive_timeout: None,
     }
   }
 }
@@ -293,6 +307,12 @@ struct Slot {
   fast_deaths: u32,
   /// Earliest instant this slot may be respawned. `None` = eligible now.
   respawn_after: Option<Instant>,
+  /// Total CPU ticks (utime+stime) at the last sweep, for the unresponsive
+  /// (no-CPU-progress) watchdog. `None` until first sampled after a spawn.
+  last_cpu_ticks: Option<u64>,
+  /// Instant the child's CPU time was last seen to advance (or when spawned).
+  /// CPU frozen past `unresponsive_timeout` from here ⇒ the worker is wedged.
+  cpu_advanced_at: Instant,
 }
 
 /// Backoff before respawning a slot with `fast_deaths` consecutive fast+unclean
@@ -301,6 +321,26 @@ struct Slot {
 fn respawn_delay(base: Duration, fast_deaths: u32) -> Duration {
   let shift = fast_deaths.saturating_sub(1).min(20);
   base.saturating_mul(1u32 << shift).min(MAX_RESPAWN_BACKOFF)
+}
+
+/// Parse total CPU time (utime + stime, in clock ticks) out of the contents of
+/// a `/proc/<pid>/stat` line. Returns `None` if unparseable. The `comm` field
+/// (2nd) can contain spaces *and* parentheses, so we anchor on the **final** `)`
+/// that closes it and index the numeric fields from there: after that paren the
+/// whitespace-split tokens begin at field 3 (`state`), so `utime` (field 14) is
+/// index 11 and `stime` (field 15) is index 12.
+fn parse_cpu_ticks(stat: &str) -> Option<u64> {
+  let after_comm = &stat[stat.rfind(')')? + 1..];
+  let fields: Vec<&str> = after_comm.split_whitespace().collect();
+  let utime: u64 = fields.get(11)?.parse().ok()?;
+  let stime: u64 = fields.get(12)?.parse().ok()?;
+  Some(utime.saturating_add(stime))
+}
+
+/// Total CPU ticks consumed by `pid` so far, from `/proc/<pid>/stat`. `None` if
+/// the process is gone or `/proc` is unreadable (e.g. a non-Linux target).
+fn child_cpu_ticks(pid: u32) -> Option<u64> {
+  parse_cpu_ticks(&std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?)
 }
 
 /// Send SIGTERM to a child (graceful relative to SIGKILL: the kernel still
@@ -549,6 +589,8 @@ where
       spawned_at: now,
       fast_deaths: 0,
       respawn_after: None,
+      last_cpu_ticks: None,
+      cpu_advanced_at: now,
     })
     .collect();
   info!(target: "pericortex:harness", "supervising {n} single-conversion worker process(es)");
@@ -597,6 +639,40 @@ where
         record_death(&mut slots[slot], slot + 1, status, config.respawn_backoff);
       }
 
+      // 1b. Unresponsive-worker watchdog: a *live* worker whose CPU time has not
+      //     advanced for `unresponsive_timeout` is wedged (blocked in a syscall,
+      //     deadlocked, or a task whose own in-process watchdog never fired).
+      //     Death-driven supervision can't see this — the process is still alive.
+      //     SIGKILL it so the slot reaps + respawns on the next sweep; because it
+      //     ran a long time, `record_death` reads it as a slow death (prompt
+      //     respawn, no crash-loop backoff), and the dispatcher re-leases its
+      //     in-flight task.
+      if exited.is_none()
+        && let Some(limit) = config.unresponsive_timeout
+        && let Some(pid) = slots[slot].child.as_ref().map(|c| c.id())
+        && let Some(cpu) = child_cpu_ticks(pid)
+      {
+        let now = Instant::now();
+        if slots[slot].last_cpu_ticks != Some(cpu) {
+          // Progress since last sweep (or first sample): reset the freeze clock.
+          slots[slot].last_cpu_ticks = Some(cpu);
+          slots[slot].cpu_advanced_at = now;
+        } else if now.saturating_duration_since(slots[slot].cpu_advanced_at) >= limit {
+          let stuck = now.saturating_duration_since(slots[slot].cpu_advanced_at);
+          warn!(
+            target: "pericortex:harness",
+            "worker #{} (pid {pid}) unresponsive: no CPU progress for {:.0}s (>= {:.0}s watchdog) — SIGKILL + respawn; its task will be re-leased",
+            slot + 1, stuck.as_secs_f64(), limit.as_secs_f64()
+          );
+          if let Some(child) = slots[slot].child.as_mut() {
+            let _ = child.kill(); // SIGKILL: a wedged process may ignore SIGTERM
+          }
+          // Reset; the reap next sweep records a (slow) death and respawns.
+          slots[slot].last_cpu_ticks = None;
+          slots[slot].cpu_advanced_at = now;
+        }
+      }
+
       // 2. Respawn an empty slot once its backoff window has elapsed — unless we
       //    are shedding under memory pressure, in which case we let the fleet
       //    shrink until memory recovers.
@@ -609,6 +685,9 @@ where
             Some(child) => {
               slots[slot].child = Some(child);
               slots[slot].spawned_at = now;
+              // Fresh child: restart the CPU-progress watchdog from zero.
+              slots[slot].last_cpu_ticks = None;
+              slots[slot].cpu_advanced_at = now;
             },
             // Spawn failed (logged in spawn_one): wait one base backoff before
             // retrying so a persistent fork/exec failure can't spin.
@@ -693,5 +772,27 @@ mod tests {
   #[test]
   fn default_worker_count_is_at_least_one() {
     assert!(default_worker_count() >= 1);
+  }
+
+  #[test]
+  fn parse_cpu_ticks_survives_comm_with_spaces_and_parens() {
+    // comm = "(weird )na)me)" — embedded spaces AND parens, the pathological
+    // case a naive `split_whitespace().nth(13)` gets wrong. Fields after the
+    // closing paren: state ppid pgrp session tty tpgid flags minflt cminflt
+    // majflt cmajflt utime(=111) stime(=222) ...
+    let line = "12345 (weird )na)me) S 1 1 1 0 -1 0 10 0 0 0 111 222 5 6 20 0 1 0";
+    assert_eq!(parse_cpu_ticks(line), Some(333));
+    // A plain comm still parses.
+    let plain = "42 (cortex_worker) R 1 1 1 0 -1 0 0 0 0 0 7 3 0 0 20 0 6 0";
+    assert_eq!(parse_cpu_ticks(plain), Some(10));
+    // Garbage / truncated → None, never a panic or a bogus tick count.
+    assert_eq!(parse_cpu_ticks("no paren here"), None);
+    assert_eq!(parse_cpu_ticks("1 (x) S 1 2 3"), None);
+  }
+
+  #[test]
+  fn unresponsive_timeout_defaults_off() {
+    // Generic consumers opt in; the check is dormant unless configured.
+    assert!(HarnessConfig::default().unresponsive_timeout.is_none());
   }
 }
