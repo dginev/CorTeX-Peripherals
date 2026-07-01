@@ -20,27 +20,29 @@ fn paint(code: &str, text: &str) -> String {
     }
 }
 
-/// Convenient printing to STDERR (with \n)
+/// Convenient printing to STDERR (with \n).
+///
+/// Best-effort: a failed write is dropped, never panicked. A fleet worker logs
+/// to stderr (journald), and that write can transiently fail — a full socket
+/// buffer / `EAGAIN` under journald backpressure, or `EPIPE` if the reader
+/// restarts. Panicking there would let a *log line* kill a mid-conversion
+/// worker (unwind → process exit → respawn → churn), and there is nowhere to
+/// report a stderr failure anyway (stderr *is* the report channel), so the only
+/// sane action is to drop the line.
 #[macro_export]
 macro_rules! println_stderr(
     ($($arg:tt)*) => ({
       use std::io::Write;
-      match writeln!(&mut ::std::io::stderr(), $($arg)* ) {
-        Ok(_) => {},
-        Err(x) => panic!("Unable to write to stderr: {}", x),
-      }
+      let _ = writeln!(&mut ::std::io::stderr(), $($arg)* );
     })
 );
 
-/// Convenient printing to STDERR
+/// Convenient printing to STDERR. Best-effort — see [`println_stderr`].
 #[macro_export]
 macro_rules! print_stderr(
     ($($arg:tt)*) => ({
       use std::io::Write;
-      match write!(&mut ::std::io::stderr(), $($arg)* ) {
-        Ok(_) => {},
-        Err(x) => panic!("Unable to write to stderr: {}", x),
-      }
+      let _ = write!(&mut ::std::io::stderr(), $($arg)* );
     })
 );
 
@@ -93,9 +95,12 @@ impl log::Log for RtxLogger {
     fn flush(&self) {}
 }
 
-/// Initialize the logger with an appropriate level of verbosity
+/// Initialize the logger with an appropriate level of verbosity. Propagates
+/// [`SetLoggerError`] (a logger was already installed) rather than panicking, so
+/// a double-init degrades to a handled error instead of taking the process down
+/// — the function already advertises the `Result`, so callers can decide.
 pub fn init(level: LevelFilter) -> Result<(), SetLoggerError> {
-    log::set_logger(&LOGGER).unwrap();
+    log::set_logger(&LOGGER)?;
     log::set_max_level(level);
     Ok(())
 }
