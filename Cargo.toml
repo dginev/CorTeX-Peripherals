@@ -3,6 +3,7 @@ name = "pericortex"
 version = "0.2.7"
 edition = "2024"
 authors = ["Deyan Ginev <d.ginev@jacobs-university.de>"]
+license = "CC0-1.0"
 
 [lib]
 name = "pericortex"
