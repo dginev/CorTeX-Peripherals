@@ -1,6 +1,6 @@
 [package]
 name = "pericortex"
-version = "0.2.7"
+version = "0.2.8"
 edition = "2024"
 authors = ["Deyan Ginev <d.ginev@jacobs-university.de>"]
 license = "CC0-1.0"
