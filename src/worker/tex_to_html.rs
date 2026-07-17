@@ -9,7 +9,7 @@ use std::process::Command;
 /// A TeX to HTML conversion worker -- this is a demonstration only
 /// it lacks robustness guards
 /// see the Perl worker used in production for a full overviewthread::spawn(move || {
-///  https://github.com/dginev/latexml-plugin-cortex
+///  <https://github.com/dginev/latexml-plugin-cortex>
 #[derive(Clone, Debug)]
 pub struct TexToHtmlWorker {
     /// the usual

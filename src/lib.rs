@@ -6,9 +6,8 @@
 // except according to those terms.
 
 //! # The CorTeX library in Rust
-//! The original library can be found at https://github.com/dginev/CorTeX
+//! The original library can be found at <https://github.com/dginev/CorTeX>
 
-#![doc(html_root_url = "https://dginev.github.io/rust-cortex-peripherals/")]
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/dginev/CorTeX/main/public/img/logo-icon.png"
 )]

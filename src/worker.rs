@@ -153,7 +153,7 @@ pub trait Worker: Clone + Send {
     /// atomically discards the lost request **and** any late reply, so the
     /// request→reply pairing can never desync — a stray reply on the old socket
     /// can't be misread as the *next* task's id (the "wires crossing" failure
-    /// mode). The receive/send timeouts ([`worker_io_timeout_ms`]) are what make
+    /// mode). The receive/send timeouts (`worker_io_timeout_ms`) are what make
     /// such a wedge *detectable*: a healthy ventilator replies to every request
     /// immediately (even "no work" is an instant mock reply), so a multi-second
     /// silence is always a fault, never normal backpressure.

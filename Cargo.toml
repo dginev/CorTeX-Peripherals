@@ -4,6 +4,11 @@ version = "0.2.8"
 edition = "2024"
 authors = ["Deyan Ginev <d.ginev@jacobs-university.de>"]
 license = "CC0-1.0"
+description = "Worker executables and the shared ZeroMQ worker runtime for CorTeX, a processing framework for scientific documents."
+repository = "https://github.com/dginev/cortex-peripherals"
+readme = "README.md"
+keywords = ["cortex", "zeromq", "worker", "distributed", "tex"]
+categories = ["science", "concurrency"]
 
 [lib]
 name = "pericortex"

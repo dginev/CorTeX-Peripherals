@@ -30,8 +30,8 @@
 //!   spawn ~124 workers, and at a 4 GiB per-child cap that is ~496 GiB of budget
 //!   against far less RAM — the exact over-commit that motivated this guard.
 //! * **Crash-loop containment** — a worker that dies *fast* and *uncleanly*
-//!   (before [`FAST_DEATH_THRESHOLD`], non-zero/​signal exit) is respawned with
-//!   exponential backoff (capped at [`MAX_RESPAWN_BACKOFF`]) instead of
+//!   (before `FAST_DEATH_THRESHOLD`, non-zero/​signal exit) is respawned with
+//!   exponential backoff (capped at `MAX_RESPAWN_BACKOFF`) instead of
 //!   hammering `fork`/`exec`. A clean exit (a completed `--limit`) or a slow
 //!   death (a real per-paper OOM/timeout/panic after startup) respawns promptly.
 //! * **No orphans** — each child sets `PR_SET_PDEATHSIG` so a SIGKILLed or
@@ -211,7 +211,7 @@ pub struct HarnessConfig {
   pub poll: Duration,
   /// Base backoff before respawning a just-exited worker. A worker that keeps
   /// dying *fast and uncleanly* (a crash loop) backs off exponentially from this
-  /// base up to [`MAX_RESPAWN_BACKOFF`]; a clean or slow exit respawns after just
+  /// base up to `MAX_RESPAWN_BACKOFF`; a clean or slow exit respawns after just
   /// this base delay.
   pub respawn_backoff: Duration,
   /// Per-child virtual-address-space ceiling in **bytes**, applied with
@@ -317,7 +317,7 @@ struct Slot {
 
 /// Backoff before respawning a slot with `fast_deaths` consecutive fast+unclean
 /// deaths: `base`, then doubling per additional death, capped at
-/// [`MAX_RESPAWN_BACKOFF`]. `fast_deaths` of 0 or 1 yields `base`.
+/// `MAX_RESPAWN_BACKOFF`. `fast_deaths` of 0 or 1 yields `base`.
 fn respawn_delay(base: Duration, fast_deaths: u32) -> Duration {
   let shift = fast_deaths.saturating_sub(1).min(20);
   base.saturating_mul(1u32 << shift).min(MAX_RESPAWN_BACKOFF)
