@@ -485,23 +485,68 @@ fn largest_rss_worker(slots: &[Slot]) -> Option<(usize, u32, u64)> {
     .max_by_key(|&(_, _, rss)| rss)
 }
 
+/// The fleet's **own** resident footprint: `(summed child RSS in bytes, live
+/// worker count)`. This is the only memory a shed can actually free, so it is
+/// what tells pressure *we* caused apart from pressure a co-tenant caused.
+///
+/// The governor watches system-wide `MemAvailable` — deliberately, since that is
+/// the honest "are we about to OOM the host" measure — but that also means any
+/// foreign process can drive the fleet into shedding work it will never get back.
+/// Without this number in the log, a co-tenant's leak is indistinguishable from a
+/// conversion regression: it took a full day to tell those apart once, because
+/// the shed line named only the victim and never the cause (a stray
+/// `rust-analyzer-proc-macro-srv` pair holding 140 GB on a 247 GiB box, against a
+/// fleet holding 31 GB).
+fn fleet_rss_bytes(slots: &[Slot]) -> (u64, usize) {
+  slots
+    .iter()
+    .filter_map(|slot| slot.child.as_ref())
+    .filter_map(|c| child_rss_bytes(c.id()))
+    .fold((0, 0), |(sum, n), rss| (sum.saturating_add(rss), n + 1))
+}
+
 /// One memory-pressure governor step. Updates `shedding` with hysteresis (enter
 /// below `floor`, exit above 1.5×`floor`) and, while shedding, SIGTERMs the
 /// largest-RSS worker at most once per [`SHED_INTERVAL`]. It does not respawn or
 /// reap — the sweep does both, and skips respawning while `*shedding`, so the
 /// fleet shrinks under sustained pressure and refills once it clears.
-fn run_governor(floor: u64, slots: &[Slot], shedding: &mut bool, last_shed: &mut Option<Instant>) {
+///
+/// `sheds` accumulates the run's total. A shed is not free: the victim's task is
+/// re-leased, and since the victim is always the *largest-RSS* worker, the same
+/// heavy paper tends to be re-picked on each retry until its retry budget is gone
+/// and the dispatcher reports it `never_completed_with_retries`. That fatal is
+/// then indistinguishable from a conversion bug, so the count is surfaced rather
+/// than left to be inferred from the per-shed lines in a multi-GB log.
+fn run_governor(
+  floor: u64, slots: &[Slot], shedding: &mut bool, last_shed: &mut Option<Instant>, sheds: &mut u64
+) {
   let Some(avail) = available_ram_bytes() else {
     return; // can't read memory → governor inactive this sweep
   };
   let ceiling = floor.saturating_add(floor / 2); // exit hysteresis at 1.5× floor
   if avail < floor {
     if !*shedding {
+      // Name the cause, not just the symptom: the fleet can only ever free its
+      // own RSS, so report that against everything else holding memory.
+      let (fleet, live) = fleet_rss_bytes(slots);
+      let foreign = total_ram_bytes()
+        .unwrap_or(0)
+        .saturating_sub(avail)
+        .saturating_sub(fleet);
       warn!(
         target: "pericortex:harness",
-        "memory pressure: MemAvailable {} MiB < floor {} MiB — shedding largest workers, pausing respawns",
-        avail / MIB, floor / MIB
+        "memory pressure: MemAvailable {} MiB < floor {} MiB — shedding largest workers, pausing \
+         respawns; this fleet holds {} MiB across {live} worker(s), {} MiB is held outside it",
+        avail / MIB, floor / MIB, fleet / MIB, foreign / MIB
       );
+      if fleet < foreign {
+        warn!(
+          target: "pericortex:harness",
+          "most memory is held OUTSIDE this fleet — shedding conversions cannot free it; expect \
+           re-leased tasks and spurious `never_completed_with_retries` fatals until the co-tenant \
+           releases memory (check the box before reading these fatals as conversion regressions)"
+        );
+      }
       *shedding = true;
     }
     let now = Instant::now();
@@ -509,10 +554,12 @@ fn run_governor(floor: u64, slots: &[Slot], shedding: &mut bool, last_shed: &mut
     if due
       && let Some((idx, pid, rss)) = largest_rss_worker(slots)
     {
+      *sheds += 1;
       warn!(
         target: "pericortex:harness",
-        "shedding worker #{} (pid {pid}, RSS {} MiB) to relieve pressure; its task will be re-leased",
-        idx + 1, rss / MIB
+        "shedding worker #{} (pid {pid}, RSS {} MiB) to relieve pressure; its task will be \
+         re-leased (shed #{} this run)",
+        idx + 1, rss / MIB, *sheds
       );
       if let Some(child) = slots[idx].child.as_ref() {
         term(child);
@@ -522,8 +569,9 @@ fn run_governor(floor: u64, slots: &[Slot], shedding: &mut bool, last_shed: &mut
   } else if avail > ceiling && *shedding {
     info!(
       target: "pericortex:harness",
-      "memory pressure cleared: MemAvailable {} MiB > {} MiB — resuming respawns",
-      avail / MIB, ceiling / MIB
+      "memory pressure cleared: MemAvailable {} MiB > {} MiB — resuming respawns ({} shed(s) so \
+       far this run)",
+      avail / MIB, ceiling / MIB, *sheds
     );
     *shedding = false;
   }
@@ -605,6 +653,7 @@ where
   // Governor state (only touched when `mem_pressure_floor_bytes` is set).
   let mut shedding = false;
   let mut last_shed: Option<Instant> = None;
+  let mut sheds: u64 = 0;
 
   while !stop_requested() {
     // Consume the wake hint up front; any death during this sweep/sleep re-arms
@@ -614,7 +663,7 @@ where
     // Memory-pressure governor: decide (before respawning) whether we are under
     // pressure, and shed the largest worker if a shed is due.
     if let Some(floor) = config.mem_pressure_floor_bytes {
-      run_governor(floor, &slots, &mut shedding, &mut last_shed);
+      run_governor(floor, &slots, &mut shedding, &mut last_shed, &mut sheds);
     }
 
     #[allow(clippy::needless_range_loop)]
@@ -708,6 +757,17 @@ where
     interruptible_sleep(nap);
   }
 
+  // A run that shed is a run whose fatals need reading with care, so say so once
+  // at the end rather than only in per-shed lines buried mid-log.
+  if sheds > 0 {
+    warn!(
+      target: "pericortex:harness",
+      "memory-pressure governor shed {sheds} worker(s) this run; each re-leased its task, so some \
+       `never_completed_with_retries` fatals in this run may be shed victims rather than \
+       conversion failures"
+    );
+  }
+
   // Graceful shutdown: SIGTERM every live worker, then wait for all to exit.
   info!(target: "pericortex:harness", "shutdown signal received — terminating workers");
   for slot in &slots {
@@ -772,6 +832,40 @@ mod tests {
   #[test]
   fn default_worker_count_is_at_least_one() {
     assert!(default_worker_count() >= 1);
+  }
+
+  #[test]
+  fn fleet_rss_counts_live_workers_only() {
+    // Nothing running → the fleet holds nothing, so all pressure is foreign.
+    assert_eq!(fleet_rss_bytes(&[]), (0, 0));
+
+    let Ok(child) = Command::new("sleep").arg("30").spawn() else {
+      return; // no `sleep` on this host → nothing to measure
+    };
+    let now = Instant::now();
+    let slot = |child| Slot {
+      child,
+      spawned_at: now,
+      fast_deaths: 0,
+      respawn_after: None,
+      last_cpu_ticks: None,
+      cpu_advanced_at: now
+    };
+    let mut slots = vec![slot(Some(child)), slot(None)];
+
+    let (rss, live) = fleet_rss_bytes(&slots);
+    // Only assertable where /proc/<pid>/status is readable (Linux dev/CI).
+    if let Some(c) = slots[0].child.as_ref()
+      && child_rss_bytes(c.id()).is_some()
+    {
+      assert_eq!(live, 1, "an empty slot must not be counted as a live worker");
+      assert!(rss > 0, "a live worker must contribute its RSS");
+    }
+
+    if let Some(mut c) = slots[0].child.take() {
+      let _ = c.kill();
+      let _ = c.wait();
+    }
   }
 
   #[test]
