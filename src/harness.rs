@@ -485,6 +485,25 @@ fn largest_rss_worker(slots: &[Slot]) -> Option<(usize, u32, u64)> {
     .max_by_key(|&(_, _, rss)| rss)
 }
 
+/// The fleet's **own** resident footprint: `(summed worker RSS in bytes, live
+/// worker count)`. This is the only memory a shed can actually free, so it is
+/// what tells pressure *we* caused apart from pressure a co-tenant caused.
+///
+/// The governor watches system-wide `MemAvailable` — deliberately, since that is
+/// the honest "are we about to OOM the host" measure — but that also means any
+/// foreign process can drive the fleet into shedding (a stray
+/// `rust-analyzer-proc-macro-srv` pair once held 140 GB on a 247 GiB box, against
+/// a fleet holding 31 GB). Approximate: it sums the workers' own `VmRSS`, so a
+/// process a worker spawns counts as outside the fleet, and a page the workers
+/// share counts once per worker.
+fn fleet_rss_bytes(slots: &[Slot]) -> (u64, usize) {
+  slots
+    .iter()
+    .filter_map(|slot| slot.child.as_ref())
+    .filter_map(|c| child_rss_bytes(c.id()))
+    .fold((0, 0), |(sum, n), rss| (sum.saturating_add(rss), n + 1))
+}
+
 /// One memory-pressure governor step. Updates `shedding` with hysteresis (enter
 /// below `floor`, exit above 1.5×`floor`) and, while shedding, SIGTERMs the
 /// largest-RSS worker at most once per [`SHED_INTERVAL`]. It does not respawn or
@@ -497,11 +516,27 @@ fn run_governor(floor: u64, slots: &[Slot], shedding: &mut bool, last_shed: &mut
   let ceiling = floor.saturating_add(floor / 2); // exit hysteresis at 1.5× floor
   if avail < floor {
     if !*shedding {
+      // Name the cause, not just the symptom: the fleet can only ever free its
+      // own RSS, so report that against everything else in use.
+      let (fleet, live) = fleet_rss_bytes(slots);
+      let foreign = total_ram_bytes()
+        .unwrap_or(0)
+        .saturating_sub(avail)
+        .saturating_sub(fleet);
       warn!(
         target: "pericortex:harness",
-        "memory pressure: MemAvailable {} MiB < floor {} MiB — shedding largest workers, pausing respawns",
-        avail / MIB, floor / MIB
+        "memory pressure: MemAvailable {} MiB < floor {} MiB — shedding largest workers, pausing \
+         respawns; this fleet holds {} MiB across {live} worker(s), {} MiB is in use outside it",
+        avail / MIB, floor / MIB, fleet / MIB, foreign / MIB
       );
+      if fleet < foreign {
+        warn!(
+          target: "pericortex:harness",
+          "most memory in use is held outside this fleet — shedding frees only the fleet's share, \
+           so sheds may continue until that memory is released; check the host for a co-tenant \
+           before reading this run's shed papers as conversion failures"
+        );
+      }
       *shedding = true;
     }
     let now = Instant::now();
